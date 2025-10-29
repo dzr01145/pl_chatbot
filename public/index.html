@@ -275,6 +275,7 @@
         border: 1px solid rgba(23, 103, 193, 0.28);
         background: rgba(255, 255, 255, 0.95);
         font-size: 1rem;
+        color: var(--text-strong);
         transition: border 0.2s ease, box-shadow 0.2s ease;
       }
 
@@ -282,6 +283,11 @@
         outline: none;
         border-color: rgba(23, 103, 193, 0.6);
         box-shadow: 0 0 0 3px rgba(23, 103, 193, 0.16);
+      }
+
+      #chat-input::placeholder {
+        color: var(--text-soft);
+        opacity: 0.8;
       }
 
       button[type="submit"] {
@@ -581,4 +587,3 @@
     <script src="./app.js" defer></script>
   </body>
 </html>
-
