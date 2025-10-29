@@ -29,40 +29,77 @@
     },
     textToHTML(markdownish) {
       const lines = markdownish.split(/\r?\n/);
-      const chunks = [];
-      let inList = false;
+      const html = [];
+      let currentList = null;
+
+      const openList = (type) => {
+        if (currentList !== type) {
+          closeList();
+          html.push(type === 'ol' ? '<ol>' : '<ul>');
+          currentList = type;
+        }
+      };
+
+      const closeList = () => {
+        if (currentList) {
+          html.push(currentList === 'ol' ? '</ol>' : '</ul>');
+          currentList = null;
+        }
+      };
+
+      const formatInline = (text) => {
+        let safe = helpers.escapeHTML(text);
+        safe = safe.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        safe = safe.replace(/`([^`]+)`/g, '<code>$1</code>');
+        safe = safe.replace(
+          /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+          '<a href="$2" target="_blank" rel="noopener">$1</a>'
+        );
+        return safe;
+      };
+
       lines.forEach((line) => {
         const trimmed = line.trim();
         if (!trimmed) {
-          if (inList) {
-            chunks.push('</ul>');
-            inList = false;
-          }
-          chunks.push('<p></p>');
+          closeList();
           return;
         }
-        const listMatch = trimmed.match(/^[-*・•]\s+(.*)/);
-        if (listMatch) {
-          if (!inList) {
-            chunks.push('<ul>');
-            inList = true;
-          }
-          chunks.push(`<li>${helpers.escapeHTML(listMatch[1])}</li>`);
+
+        if (/^---+$/.test(trimmed)) {
+          closeList();
+          html.push('<hr>');
           return;
         }
-        if (inList) {
-          chunks.push('</ul>');
-          inList = false;
+
+        const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)/);
+        if (headingMatch) {
+          closeList();
+          const level = headingMatch[1].length;
+          const content = formatInline(headingMatch[2]);
+          html.push(`<h${level}>${content}</h${level}>`);
+          return;
         }
-        const processed = trimmed
-          .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-          .replace(/`([^`]+)`/g, '<code>$1</code>');
-        chunks.push(`<p>${helpers.escapeHTML(processed)}</p>`);
+
+        const orderedMatch = trimmed.match(/^\d+[.)]\s+(.*)/);
+        if (orderedMatch) {
+          openList('ol');
+          html.push(`<li>${formatInline(orderedMatch[1])}</li>`);
+          return;
+        }
+
+        const unorderedMatch = trimmed.match(/^[-*・•]\s+(.*)/);
+        if (unorderedMatch) {
+          openList('ul');
+          html.push(`<li>${formatInline(unorderedMatch[1])}</li>`);
+          return;
+        }
+
+        closeList();
+        html.push(`<p>${formatInline(trimmed)}</p>`);
       });
-      if (inList) {
-        chunks.push('</ul>');
-      }
-      return chunks.join('');
+
+      closeList();
+      return html.join('');
     },
     persist() {
       // 履歴は保持しない方針のため何もしない
