@@ -19,7 +19,7 @@ const apiKey = process.env.GEMINI_API_KEY;
 const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
 const MAX_HISTORY_ITEMS = 12;
 const CONTINUATION_PROMPT =
-  '回答が途中で終了したようです。これまでの回答内容と重複させず、残りの重要なアクションや留意点を簡潔な箇条書き（最大6項目）で補足してください。';
+  '回答が途中で終了したようです。前回までの内容と重複させず、謝罪や前置き、締めの挨拶は一切書かずに、残りの重要なアクションや留意点を最大6項目の箇条書きで補足してください。';
 
 const generationConfig = {
   temperature: 0.3,
@@ -103,6 +103,19 @@ function extractResponsePayload(result) {
   };
 }
 
+function cleanContinuation(text) {
+  if (!text) return '';
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  const filtered = lines.filter((line) => {
+    if (!line) return false;
+    if (/^(承知いたしました|了解しました)/.test(line)) return false;
+    if (line.includes('失礼') || line.includes('申し訳')) return false;
+    if (/^謝罪/.test(line)) return false;
+    return true;
+  });
+  return filtered.join('\n');
+}
+
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -161,10 +174,8 @@ app.post('/api/chat', async (req, res) => {
         const continuationResult = await chatSession.sendMessage(CONTINUATION_PROMPT);
         const continuationPayload = extractResponsePayload(continuationResult);
         if (continuationPayload.text) {
-          const continuationLabel = '【続き（自動要約）】';
-          reply = [reply, continuationLabel, continuationPayload.text]
-            .filter(Boolean)
-            .join('\n\n');
+          const continuationText = cleanContinuation(continuationPayload.text);
+          reply = [reply, continuationText].filter(Boolean).join('\n\n');
           continuationApplied = true;
         }
         finishReason = continuationPayload.finishReason || finishReason;
