@@ -120,6 +120,7 @@ app.post('/api/chat', async (req, res) => {
     const result = await chatSession.sendMessage(message);
     const candidates = result?.response?.candidates ?? [];
     const primary = candidates[0];
+    const promptFeedback = result?.response?.promptFeedback;
 
     let reply = '';
     if (typeof result?.response?.text === 'function') {
@@ -134,16 +135,43 @@ app.post('/api/chat', async (req, res) => {
     }
 
     if (!reply) {
-      if (primary?.finishReason === 'SAFETY') {
+      const blockReason = primary?.finishReason || promptFeedback?.blockReason;
+      if (blockReason === 'SAFETY') {
+        const blockedCategories = promptFeedback?.safetyRatings
+          ?.filter((rating) => rating?.blocked)
+          ?.map((rating) => rating.category)
+          ?.join(', ');
         reply =
-          'Google Gemini が安全ポリシーにより応答をブロックしました。質問の表現を見直し、機微情報を含めない形で再送してください。';
+          'Google Gemini が安全ポリシーにより応答をブロックしました。' +
+          (blockedCategories
+            ? `ブロックカテゴリ: ${blockedCategories}。`
+            : '') +
+          '質問の表現を見直し、機微情報を含めない形で再送してください。';
+      } else if (blockReason === 'OTHER') {
+        reply =
+          'Google Gemini のポリシーまたはシステム判定により応答が生成されませんでした。表現を言い換えて再度お試しください。';
+      } else if (blockReason === 'MAX_TOKENS') {
+        reply =
+          '応答が長くなりすぎたため途中で終了しました。質問をもう少し具体的に分割して再度お試しください。';
+      } else if (blockReason === 'RECITATION') {
+        reply =
+          '著作権などの制限により内容が返せません。概要や要点を聞く形で再度お試しください。';
+      } else if (primary?.finishReason === 'STOP') {
+        reply =
+          'Gemini API から有効な応答を取得できませんでした。時間をおいて再試行するか、別の表現でご相談ください。';
       } else {
         reply =
           'Gemini API から有効な応答を取得できませんでした。時間をおいて再試行するか、別の表現でご相談ください。';
       }
     }
 
-    res.json({ reply, model: modelName });
+    const responseBody = { reply, model: modelName };
+    if (process.env.NODE_ENV !== 'production') {
+      responseBody.promptFeedback = promptFeedback;
+      responseBody.finishReason = primary?.finishReason;
+    }
+
+    res.json(responseBody);
   } catch (error) {
     console.error('Gemini API error:', error);
     const messageText =
@@ -161,4 +189,3 @@ app.get('*', (_req, res) => {
 app.listen(port, () => {
   console.log(`🚀 PL Chatbot server running on http://localhost:${port}`);
 });
-
