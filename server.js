@@ -90,7 +90,9 @@ app.post('/api/chat', async (req, res) => {
 
   const { message, history } = req.body || {};
   if (!message || typeof message !== 'string') {
-    return res.status(400).json({ error: 'message フィールドにテキストを指定してください。' });
+    return res
+      .status(400)
+      .json({ error: 'message フィールドにテキストを指定してください。' });
   }
 
   const normalizedHistory = Array.isArray(history) ? history : [];
@@ -98,13 +100,13 @@ app.post('/api/chat', async (req, res) => {
   let seenFirstUser = false;
   normalizedHistory.forEach((item) => {
     if (!item?.role || !item?.content) return;
-    if (item.role === 'assistant' && !seenFirstUser) {
-      return;
-    }
+    if (item.role === 'assistant' && !seenFirstUser) return;
+
     const mappedRole = item.role === 'assistant' ? 'model' : 'user';
     if (mappedRole === 'user') {
       seenFirstUser = true;
     }
+
     geminiHistory.push({
       role: mappedRole,
       parts: [{ text: item.content }],
@@ -116,18 +118,39 @@ app.post('/api/chat', async (req, res) => {
       history: geminiHistory,
     });
     const result = await chatSession.sendMessage(message);
-    const reply = result?.response?.text?.() || '';
+    const candidates = result?.response?.candidates ?? [];
+    const primary = candidates[0];
+
+    let reply = '';
+    if (typeof result?.response?.text === 'function') {
+      reply = result.response.text().trim();
+    }
+    if (!reply && primary?.content?.parts) {
+      reply = primary.content.parts
+        .map((part) => part?.text?.trim())
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+    }
 
     if (!reply) {
-      return res.status(502).json({ error: 'Gemini API から有効な応答が得られませんでした。' });
+      if (primary?.finishReason === 'SAFETY') {
+        reply =
+          'Google Gemini が安全ポリシーにより応答をブロックしました。質問の表現を見直し、機微情報を含めない形で再送してください。';
+      } else {
+        reply =
+          'Gemini API から有効な応答を取得できませんでした。時間をおいて再試行するか、別の表現でご相談ください。';
+      }
     }
 
     res.json({ reply, model: modelName });
   } catch (error) {
     console.error('Gemini API error:', error);
-    res.status(500).json({
-      error: error.message || 'Gemini API への問い合わせに失敗しました。',
-    });
+    const messageText =
+      error?.response?.error?.message ||
+      error?.message ||
+      'Gemini API への問い合わせに失敗しました。';
+    res.status(500).json({ error: messageText });
   }
 });
 
@@ -138,3 +161,4 @@ app.get('*', (_req, res) => {
 app.listen(port, () => {
   console.log(`🚀 PL Chatbot server running on http://localhost:${port}`);
 });
+
