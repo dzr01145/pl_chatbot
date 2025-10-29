@@ -176,7 +176,7 @@
 
     submitBtn.disabled = true;
     showTypingIndicator();
-    setStatus('Google Gemini 2.5 Pro に問い合わせ中…（数秒お待ちください）');
+    setStatus('Google Gemini 2.5 Pro に問い合わせ中…（最大10秒ほどかかる場合があります）');
 
     try {
       const data = await sendMessageToServer(value);

@@ -18,12 +18,14 @@ const port = process.env.PORT || 3000;
 const apiKey = process.env.GEMINI_API_KEY;
 const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
 const MAX_HISTORY_ITEMS = 12;
+const CONTINUATION_PROMPT =
+  '回答が途中で終了したようです。これまでの回答内容と重複させず、残りの重要なアクションや留意点を簡潔な箇条書き（最大6項目）で補足してください。';
 
 const generationConfig = {
   temperature: 0.3,
   topP: 0.8,
   topK: 40,
-  maxOutputTokens: 1024,
+  maxOutputTokens: 2048,
 };
 
 const safetySettings = [
@@ -76,6 +78,31 @@ const model = genAI
     })
   : null;
 
+function extractResponsePayload(result) {
+  const response = result?.response ?? {};
+  const candidates = response.candidates ?? [];
+  const primary = candidates[0];
+
+  let text = '';
+  if (typeof response.text === 'function') {
+    text = response.text().trim();
+  }
+  if (!text && primary?.content?.parts) {
+    text = primary.content.parts
+      .map((part) => part?.text?.trim())
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+
+  return {
+    text,
+    finishReason: primary?.finishReason,
+    blockReason: primary?.finishReason || response?.promptFeedback?.blockReason,
+    promptFeedback: response?.promptFeedback,
+  };
+}
+
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -120,58 +147,74 @@ app.post('/api/chat', async (req, res) => {
     const chatSession = model.startChat({
       history: geminiHistory,
     });
-    const result = await chatSession.sendMessage(message);
-    const candidates = result?.response?.candidates ?? [];
-    const primary = candidates[0];
-    const promptFeedback = result?.response?.promptFeedback;
+    const initialResult = await chatSession.sendMessage(message);
+    const initialPayload = extractResponsePayload(initialResult);
 
-    let reply = '';
-    if (typeof result?.response?.text === 'function') {
-      reply = result.response.text().trim();
-    }
-    if (!reply && primary?.content?.parts) {
-      reply = primary.content.parts
-        .map((part) => part?.text?.trim())
-        .filter(Boolean)
-        .join('\n')
-        .trim();
+    let reply = initialPayload.text;
+    const promptFeedbacks = [initialPayload.promptFeedback].filter(Boolean);
+    let finishReason = initialPayload.finishReason;
+    let blockReason = initialPayload.blockReason;
+    let continuationApplied = false;
+
+    if (finishReason === 'MAX_TOKENS') {
+      try {
+        const continuationResult = await chatSession.sendMessage(CONTINUATION_PROMPT);
+        const continuationPayload = extractResponsePayload(continuationResult);
+        if (continuationPayload.text) {
+          const continuationLabel = '【続き（自動要約）】';
+          reply = [reply, continuationLabel, continuationPayload.text]
+            .filter(Boolean)
+            .join('\n\n');
+          continuationApplied = true;
+        }
+        finishReason = continuationPayload.finishReason || finishReason;
+        blockReason = continuationPayload.blockReason || blockReason;
+        if (continuationPayload.promptFeedback) {
+          promptFeedbacks.push(continuationPayload.promptFeedback);
+        }
+      } catch (continuationError) {
+        console.warn('Continuation request failed:', continuationError);
+      }
     }
 
     if (!reply) {
-      const blockReason = primary?.finishReason || promptFeedback?.blockReason;
       if (blockReason === 'SAFETY') {
-        const blockedCategories = promptFeedback?.safetyRatings
-          ?.filter((rating) => rating?.blocked)
-          ?.map((rating) => rating.category)
-          ?.join(', ');
+        const blockedCategories = promptFeedbacks
+          .flatMap((feedback) => feedback?.safetyRatings ?? [])
+          .filter((rating) => rating?.blocked)
+          .map((rating) => rating.category)
+          .join(', ');
         reply =
           'Google Gemini が安全ポリシーにより応答をブロックしました。' +
-          (blockedCategories
-            ? `ブロックカテゴリ: ${blockedCategories}。`
-            : '') +
+          (blockedCategories ? `ブロックカテゴリ: ${blockedCategories}。` : '') +
           '質問の表現を見直し、機微情報を含めない形で再送してください。';
       } else if (blockReason === 'OTHER') {
         reply =
           'Google Gemini のポリシーまたはシステム判定により応答が生成されませんでした。表現を言い換えて再度お試しください。';
-      } else if (blockReason === 'MAX_TOKENS') {
-        reply =
-          '応答が長くなりすぎたため途中で終了しました。質問をもう少し具体的に分割して再度お試しください。';
       } else if (blockReason === 'RECITATION') {
         reply =
           '著作権などの制限により内容が返せません。概要や要点を聞く形で再度お試しください。';
-      } else if (primary?.finishReason === 'STOP') {
+      } else if (blockReason === 'MAX_TOKENS') {
         reply =
-          'Gemini API から有効な応答を取得できませんでした。時間をおいて再試行するか、別の表現でご相談ください。';
+          '応答が長くなりすぎたため途中で終了しました。質問をもう少し具体的に分割して再度お試しください。';
       } else {
         reply =
           'Gemini API から有効な応答を取得できませんでした。時間をおいて再試行するか、別の表現でご相談ください。';
       }
     }
 
-    const responseBody = { reply, model: modelName };
+    const responseBody = {
+      reply,
+      model: modelName,
+    };
+
     if (process.env.NODE_ENV !== 'production') {
-      responseBody.promptFeedback = promptFeedback;
-      responseBody.finishReason = primary?.finishReason;
+      responseBody.meta = {
+        finishReason,
+        blockReason,
+        continuationApplied,
+        promptFeedbacks,
+      };
     }
 
     res.json(responseBody);
