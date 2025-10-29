@@ -68,12 +68,22 @@ app.post('/api/chat', async (req, res) => {
   }
 
   const normalizedHistory = Array.isArray(history) ? history : [];
-  const geminiHistory = normalizedHistory
-    .filter((item) => item?.role && item?.content)
-    .map((item) => ({
-      role: item.role === 'assistant' ? 'model' : 'user',
+  const geminiHistory = [];
+  let seenFirstUser = false;
+  normalizedHistory.forEach((item) => {
+    if (!item?.role || !item?.content) return;
+    if (item.role === 'assistant' && !seenFirstUser) {
+      return;
+    }
+    const mappedRole = item.role === 'assistant' ? 'model' : 'user';
+    if (mappedRole === 'user') {
+      seenFirstUser = true;
+    }
+    geminiHistory.push({
+      role: mappedRole,
       parts: [{ text: item.content }],
-    }));
+    });
+  });
 
   try {
     const chatSession = model.startChat({
@@ -104,4 +114,3 @@ app.get('*', (_req, res) => {
 app.listen(port, () => {
   console.log(`🚀 PL Chatbot server running on http://localhost:${port}`);
 });
-
