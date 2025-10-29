@@ -17,6 +17,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 const apiKey = process.env.GEMINI_API_KEY;
 const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
+const MAX_HISTORY_ITEMS = 12;
 
 const generationConfig = {
   temperature: 0.3,
@@ -95,7 +96,9 @@ app.post('/api/chat', async (req, res) => {
       .json({ error: 'message フィールドにテキストを指定してください。' });
   }
 
-  const normalizedHistory = Array.isArray(history) ? history : [];
+  const normalizedHistory = Array.isArray(history)
+    ? history.slice(-MAX_HISTORY_ITEMS)
+    : [];
   const geminiHistory = [];
   let seenFirstUser = false;
   normalizedHistory.forEach((item) => {

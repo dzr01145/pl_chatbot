@@ -11,6 +11,7 @@
   const suggestionButtons = document.querySelectorAll('.suggestion-btn');
 
   const STORAGE_KEY = 'pl-chatbot-history-v1';
+  const MAX_HISTORY_ITEMS = 12;
 
   const state = {
     messages: [],
@@ -64,29 +65,13 @@
       return chunks.join('');
     },
     persist() {
-      try {
-        sessionStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify(state.messages.slice(-20))
-        );
-      } catch (error) {
-        console.warn('Failed to persist chat history', error);
-      }
+      // 履歴は保持しない方針のため何もしない
     },
     restore() {
       try {
-        const stored = sessionStorage.getItem(STORAGE_KEY);
-        if (!stored) return;
-        const parsed = JSON.parse(stored);
-        if (!Array.isArray(parsed)) return;
-        parsed.forEach((entry) => {
-          if (entry.role && entry.content) {
-            state.messages.push(entry);
-            renderMessage(entry);
-          }
-        });
+        sessionStorage.removeItem(STORAGE_KEY);
       } catch (error) {
-        console.warn('Failed to restore chat history', error);
+        console.warn('Failed to clear stored chat history', error);
       }
     },
   };
@@ -160,7 +145,7 @@
   async function sendMessageToServer(message) {
     const payload = {
       message,
-      history: state.messages.slice(0, -1),
+      history: state.messages.slice(0, -1).slice(-MAX_HISTORY_ITEMS),
     };
     const response = await fetch('/api/chat', {
       method: 'POST',
@@ -191,7 +176,7 @@
 
     submitBtn.disabled = true;
     showTypingIndicator();
-    setStatus('Google Gemini 2.5 Pro に問い合わせ中...');
+    setStatus('Google Gemini 2.5 Pro に問い合わせ中…（数秒お待ちください）');
 
     try {
       const data = await sendMessageToServer(value);
@@ -262,4 +247,3 @@
 
   document.addEventListener('DOMContentLoaded', bootstrap);
 })();
-
