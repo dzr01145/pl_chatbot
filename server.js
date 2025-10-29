@@ -5,7 +5,11 @@ const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 const dotenv = require('dotenv');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const {
+  GoogleGenerativeAI,
+  HarmCategory,
+  HarmBlockThreshold,
+} = require('@google/generative-ai');
 
 dotenv.config();
 
@@ -22,11 +26,22 @@ const generationConfig = {
 };
 
 const safetySettings = [
-  { category: 'HARM_CATEGORY_DANGEROUS', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
-  { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
-  { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
-  { category: 'HARM_CATEGORY_SEXUAL', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
-  { category: 'HARM_CATEGORY_SELF_HARM', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
+  {
+    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+  },
 ];
 
 if (!apiKey) {
@@ -36,16 +51,27 @@ if (!apiKey) {
 }
 
 const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
-const model = genAI
-  ? genAI.getGenerativeModel({
-      model: modelName,
-      systemInstruction: [
+const systemInstruction = {
+  role: 'system',
+  parts: [
+    {
+      text: [
         'You are a bilingual (Japanese primary, English secondary) assistant specializing in product safety, product liability (PL), recall response, and quality compliance.',
         'When relevant, outline regulatory requirements within Japan (e.g., PL法, 消費生活用製品安全法, JIS Q 9001) and global best practices.',
         'Provide step-by-step guidance, risk assessments, stakeholder coordination advice, and documentation templates as text lists when appropriate.',
         'If the user asks for legal confirmation or makes critical decisions, remind them to consult qualified professionals and responsible authorities.',
         'Reject requests unrelated to manufacturing quality, PL, or product safety topics, and keep the conversation professional and supportive.',
       ].join(' '),
+    },
+  ],
+};
+
+const model = genAI
+  ? genAI.getGenerativeModel({
+      model: modelName,
+      systemInstruction,
+      safetySettings,
+      generationConfig,
     })
   : null;
 
@@ -88,8 +114,6 @@ app.post('/api/chat', async (req, res) => {
   try {
     const chatSession = model.startChat({
       history: geminiHistory,
-      generationConfig,
-      safetySettings,
     });
     const result = await chatSession.sendMessage(message);
     const reply = result?.response?.text?.() || '';
