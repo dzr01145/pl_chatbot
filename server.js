@@ -21,6 +21,9 @@ const MAX_HISTORY_ITEMS = 12;
 const CONTINUATION_PROMPT =
   '回答が途中で終了したようです。前回までの内容と重複させず、謝罪や前置き、締めの挨拶は一切書かずに、残りの重要なアクションや留意点を最大6項目の箇条書きで補足してください。';
 
+const authUser = process.env.AUTH_USER;
+const authPassword = process.env.AUTH_PASSWORD;
+
 const generationConfig = {
   temperature: 0.3,
   topP: 0.8,
@@ -116,7 +119,45 @@ function cleanContinuation(text) {
   return filtered.join('\n');
 }
 
+function requireBasicAuth(req, res, next) {
+  if (!authUser || !authPassword) {
+    return next();
+  }
+
+  const header = req.headers.authorization || '';
+  const [scheme, encoded] = header.split(' ');
+  if (scheme !== 'Basic' || !encoded) {
+    res.set('WWW-Authenticate', 'Basic realm="PL Chatbot"');
+    return res.status(401).send('Authentication required.');
+  }
+
+  let decoded = '';
+  try {
+    decoded = Buffer.from(encoded, 'base64').toString('utf8');
+  } catch (error) {
+    res.set('WWW-Authenticate', 'Basic realm="PL Chatbot"');
+    return res.status(401).send('Invalid authentication token.');
+  }
+
+  const separatorIndex = decoded.indexOf(':');
+  if (separatorIndex === -1) {
+    res.set('WWW-Authenticate', 'Basic realm="PL Chatbot"');
+    return res.status(401).send('Invalid authentication token.');
+  }
+
+  const incomingUser = decoded.slice(0, separatorIndex);
+  const incomingPassword = decoded.slice(separatorIndex + 1);
+
+  if (incomingUser !== authUser || incomingPassword !== authPassword) {
+    res.set('WWW-Authenticate', 'Basic realm="PL Chatbot"');
+    return res.status(401).send('Invalid credentials.');
+  }
+
+  return next();
+}
+
 app.use(cors());
+app.use(requireBasicAuth);
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 

@@ -41,6 +41,10 @@ Google Gemini 2.5 Pro API を利用し、製品安全・製造物責任（PL）�
    - （任意）`GEMINI_MODEL`: 既定は `gemini-2.5-pro`
 5. Deploy を開始するとビルドが走り、公開 URL が自動発行されます。
 
+### Basic 認証の設定（任意）
+
+`AUTH_USER` と `AUTH_PASSWORD` の両方を環境変数として設定すると、全ルートに対して Basic 認証が有効になります。値を設定しない場合は認証は無効のままです。Render などのホスティングでは推測されにくいユーザー名と強固なパスワードを使用し、設定後にサービスを再起動してください。
+
 ### セキュリティと運用上の注意
 
 - Gemini API キーは `.env` や Render の環境変数で安全に管理し、クライアント側へ露出させないでください。
@@ -52,4 +56,3 @@ Google Gemini 2.5 Pro API を利用し、製品安全・製造物責任（PL）�
 - `public/app.js` 内の `welcome` メッセージやスロットリング設定を変えると UX が調整できます。
 - `server.js` の `systemInstruction` や `generationConfig` を調整して、回答のトーン・詳細度・語調を最適化できます。
 - 相談ログを保存したい場合は、サーバー側でデータベース（例: PostgreSQL、Firestore 等）と連携する処理を追加してください。
-
