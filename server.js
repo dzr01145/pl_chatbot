@@ -28,7 +28,7 @@ const generationConfig = {
   temperature: 0.3,
   topP: 0.8,
   topK: 40,
-  maxOutputTokens: 2048,
+  maxOutputTokens: 3072,
 };
 
 const safetySettings = [
