@@ -13,11 +13,12 @@
   const apiKeySubmitBtn = document.getElementById('api-key-submit');
   const apiKeySection = document.getElementById('api-key-section');
   const chatSection = document.getElementById('chat-section');
+  const modelSelect = document.getElementById('model-select');
+  const lengthSelect = document.getElementById('length-select');
 
   const STORAGE_KEY_HISTORY = 'pl-chatbot-history-v1';
   const STORAGE_KEY_API_KEY = 'pl-chatbot-api-key-v1';
   const MAX_HISTORY_ITEMS = 12;
-  const MODEL_NAME = 'gemini-2.5-pro';
   const CONTINUATION_PROMPT =
     '回答が途中で終了したようです。前回までの内容と重複させず、謝罪や前置き、締めの挨拶は一切書かずに、残りの重要なアクションや留意点を最大6項目の箇条書きで補足してください。';
 
@@ -227,6 +228,11 @@
       throw new Error('API キーが設定されていません。');
     }
 
+    // プルダウンから選択された値を取得
+    const modelName = modelSelect.value;
+    const lengthType = lengthSelect.value;
+    const maxTokens = lengthType === 'short' ? 450 : 3072;
+
     const systemInstruction = {
       role: 'system',
       parts: [
@@ -272,7 +278,7 @@
         temperature: 0.3,
         topP: 0.8,
         topK: 40,
-        maxOutputTokens: 3072,
+        maxOutputTokens: maxTokens,
       },
       safetySettings: [
         {
@@ -294,7 +300,7 @@
       ],
     };
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: {
