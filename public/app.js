@@ -9,13 +9,22 @@
   const drawer = document.getElementById('guide-drawer');
   const overlay = document.getElementById('drawer-overlay');
   const suggestionButtons = document.querySelectorAll('.suggestion-btn');
+  const apiKeyInput = document.getElementById('api-key-input');
+  const apiKeySubmitBtn = document.getElementById('api-key-submit');
+  const apiKeySection = document.getElementById('api-key-section');
+  const chatSection = document.getElementById('chat-section');
 
-  const STORAGE_KEY = 'pl-chatbot-history-v1';
+  const STORAGE_KEY_HISTORY = 'pl-chatbot-history-v1';
+  const STORAGE_KEY_API_KEY = 'pl-chatbot-api-key-v1';
   const MAX_HISTORY_ITEMS = 12;
+  const MODEL_NAME = 'gemini-2.5-pro';
+  const CONTINUATION_PROMPT =
+    '回答が途中で終了したようです。前回までの内容と重複させず、謝罪や前置き、締めの挨拶は一切書かずに、残りの重要なアクションや留意点を最大6項目の箇条書きで補足してください。';
 
   const state = {
     messages: [],
     typingBubble: null,
+    apiKey: null,
   };
 
   const helpers = {
@@ -106,10 +115,30 @@
     },
     restore() {
       try {
-        sessionStorage.removeItem(STORAGE_KEY);
+        sessionStorage.removeItem(STORAGE_KEY_HISTORY);
       } catch (error) {
         console.warn('Failed to clear stored chat history', error);
       }
+    },
+    saveApiKey(key) {
+      try {
+        sessionStorage.setItem(STORAGE_KEY_API_KEY, key);
+        state.apiKey = key;
+      } catch (error) {
+        console.warn('Failed to save API key', error);
+      }
+    },
+    loadApiKey() {
+      try {
+        const key = sessionStorage.getItem(STORAGE_KEY_API_KEY);
+        if (key) {
+          state.apiKey = key;
+          return true;
+        }
+      } catch (error) {
+        console.warn('Failed to load API key', error);
+      }
+      return false;
     },
   };
 
@@ -179,24 +208,168 @@
     drawerToggle.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
   }
 
-  async function sendMessageToServer(message) {
-    const payload = {
-      message,
-      history: state.messages.slice(0, -1).slice(-MAX_HISTORY_ITEMS),
+  function cleanContinuation(text) {
+    if (!text) return '';
+    const lines = text.split(/\r?\n/).map((line) => line.trim());
+    const filtered = lines.filter((line) => {
+      if (!line) return false;
+      if (/^(承知いたしました|了解しました)/.test(line)) return false;
+      if (line.includes('失礼') || line.includes('申し訳')) return false;
+      if (/^謝罪/.test(line)) return false;
+      return true;
+    });
+    return filtered.join('\n');
+  }
+
+  async function callGeminiAPI(message, history) {
+    const apiKey = state.apiKey;
+    if (!apiKey) {
+      throw new Error('API キーが設定されていません。');
+    }
+
+    const systemInstruction = {
+      role: 'system',
+      parts: [
+        {
+          text: [
+            'You are a bilingual (Japanese primary, English secondary) assistant specializing in product safety, product liability (PL), recall response, and quality compliance.',
+            'When relevant, outline regulatory requirements within Japan (e.g., PL法, 消費生活用製品安全法, JIS Q 9001) and global best practices.',
+            'Provide step-by-step guidance, risk assessments, stakeholder coordination advice, and documentation templates as text lists when appropriate.',
+            'If the user asks for legal confirmation or makes critical decisions, remind them to consult qualified professionals and responsible authorities.',
+            'Reject requests unrelated to manufacturing quality, PL, or product safety topics, and keep the conversation professional and supportive.',
+          ].join(' '),
+        },
+      ],
     };
-    const response = await fetch('/api/chat', {
+
+    const geminiHistory = [];
+    let seenFirstUser = false;
+    history.forEach((item) => {
+      if (!item?.role || !item?.content) return;
+      if (item.role === 'assistant' && !seenFirstUser) return;
+
+      const mappedRole = item.role === 'assistant' ? 'model' : 'user';
+      if (mappedRole === 'user') {
+        seenFirstUser = true;
+      }
+
+      geminiHistory.push({
+        role: mappedRole,
+        parts: [{ text: item.content }],
+      });
+    });
+
+    const requestBody = {
+      system_instruction: systemInstruction,
+      contents: [
+        ...geminiHistory,
+        {
+          role: 'user',
+          parts: [{ text: message }],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.3,
+        topP: 0.8,
+        topK: 40,
+        maxOutputTokens: 3072,
+      },
+      safetySettings: [
+        {
+          category: 'HARM_CATEGORY_HATE_SPEECH',
+          threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+        },
+        {
+          category: 'HARM_CATEGORY_HARASSMENT',
+          threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+        },
+        {
+          category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+          threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+        },
+        {
+          category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+          threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+        },
+      ],
+    };
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(requestBody),
     });
+
     if (!response.ok) {
-      const detail = await response.json().catch(() => ({}));
-      const errorMessage = detail?.error || `サーバーエラー: ${response.status}`;
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage =
+        errorData?.error?.message || `API エラー: ${response.status}`;
       throw new Error(errorMessage);
     }
-    return response.json();
+
+    const data = await response.json();
+    return data;
+  }
+
+  function extractResponseText(data) {
+    const candidates = data?.candidates ?? [];
+    const primary = candidates[0];
+    if (!primary) return { text: '', finishReason: 'UNKNOWN' };
+
+    const parts = primary?.content?.parts ?? [];
+    const text = parts
+      .map((part) => part?.text?.trim())
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+
+    return {
+      text,
+      finishReason: primary?.finishReason,
+    };
+  }
+
+  async function sendMessageToGemini(message) {
+    const normalizedHistory = state.messages.slice(0, -1).slice(-MAX_HISTORY_ITEMS);
+
+    try {
+      const initialResult = await callGeminiAPI(message, normalizedHistory);
+      const initialPayload = extractResponseText(initialResult);
+
+      let reply = initialPayload.text;
+      let finishReason = initialPayload.finishReason;
+
+      // MAX_TOKENS の場合、継続リクエスト
+      if (finishReason === 'MAX_TOKENS') {
+        try {
+          const continuationResult = await callGeminiAPI(
+            CONTINUATION_PROMPT,
+            [...normalizedHistory, { role: 'user', content: message }, { role: 'assistant', content: reply }]
+          );
+          const continuationPayload = extractResponseText(continuationResult);
+          if (continuationPayload.text) {
+            const continuationText = cleanContinuation(continuationPayload.text);
+            reply = [reply, continuationText].filter(Boolean).join('\n\n');
+          }
+          finishReason = continuationPayload.finishReason || finishReason;
+        } catch (continuationError) {
+          console.warn('Continuation request failed:', continuationError);
+        }
+      }
+
+      if (!reply) {
+        reply =
+          'Gemini API から有効な応答を取得できませんでした。時間をおいて再試行するか、別の表現でご相談ください。';
+      }
+
+      return reply;
+    } catch (error) {
+      console.error('Gemini API error:', error);
+      throw error;
+    }
   }
 
   async function handleSubmit(event) {
@@ -216,9 +389,8 @@
     setStatus('Google Gemini 2.5 Pro に問い合わせ中…（最大10秒ほどかかる場合があります）');
 
     try {
-      const data = await sendMessageToServer(value);
+      const assistantContent = await sendMessageToGemini(value);
       removeTypingIndicator();
-      const assistantContent = data.reply?.trim() || '回答を取得できませんでした。';
       const assistantEntry = { role: 'assistant', content: assistantContent };
       state.messages.push(assistantEntry);
       renderMessage(assistantEntry);
@@ -235,6 +407,34 @@
     } finally {
       setStatus('');
       submitBtn.disabled = false;
+    }
+  }
+
+  function handleApiKeySubmit(event) {
+    event.preventDefault();
+    const key = apiKeyInput.value.trim();
+    if (!key) {
+      alert('API キーを入力してください。');
+      return;
+    }
+    helpers.saveApiKey(key);
+    apiKeySection.style.display = 'none';
+    chatSection.style.display = 'flex';
+    inputEl.focus();
+
+    // ウェルカムメッセージを表示
+    if (state.messages.length === 0) {
+      const welcome = {
+        role: 'assistant',
+        content: [
+          'こんにちは。製品安全・PL 対応に関するリスク整理と対応方針づくりを支援するチャットボットです。',
+          '具体的な状況を共有していただければ、必要な法的観点、社内プロセス、関係先への連絡方法などを整理します。',
+          '重要情報や個人情報は含めず、参考情報としてご利用ください。',
+        ].join('\n'),
+      };
+      state.messages.push(welcome);
+      renderMessage(welcome);
+      helpers.persist();
     }
   }
 
@@ -263,21 +463,32 @@
 
   function bootstrap() {
     helpers.restore();
-    if (state.messages.length === 0) {
-      const welcome = {
-        role: 'assistant',
-        content: [
-          'こんにちは。製品安全・PL 対応に関するリスク整理と対応方針づくりを支援するチャットボットです。',
-          '具体的な状況を共有していただければ、必要な法的観点、社内プロセス、関係先への連絡方法などを整理します。',
-          '重要情報や個人情報は含めず、参考情報としてご利用ください。',
-        ].join('\n'),
-      };
-      state.messages.push(welcome);
-      renderMessage(welcome);
-      helpers.persist();
+
+    // API キーがセッションにあるかチェック
+    if (helpers.loadApiKey()) {
+      apiKeySection.style.display = 'none';
+      chatSection.style.display = 'flex';
+
+      if (state.messages.length === 0) {
+        const welcome = {
+          role: 'assistant',
+          content: [
+            'こんにちは。製品安全・PL 対応に関するリスク整理と対応方針づくりを支援するチャットボットです。',
+            '具体的な状況を共有していただければ、必要な法的観点、社内プロセス、関係先への連絡方法などを整理します。',
+            '重要情報や個人情報は含めず、参考情報としてご利用ください。',
+          ].join('\n'),
+        };
+        state.messages.push(welcome);
+        renderMessage(welcome);
+        helpers.persist();
+      }
+    } else {
+      apiKeySection.style.display = 'flex';
+      chatSection.style.display = 'none';
     }
 
     formEl.addEventListener('submit', handleSubmit);
+    document.getElementById('api-key-form').addEventListener('submit', handleApiKeySubmit);
     initSuggestions();
     initDrawerControls();
   }
